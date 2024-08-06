@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for deploying Lambda functions and related resources.
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Default: 'coffee-cartel-bucket'
+    Description: Name of the existing S3 bucket that triggers the Lambda function
+
+  SSMParameterName:
+    Type: String
+    Default: 'coffee_cartel_redshift_settings'
+    Description: Name of the SSM parameter that contains Redshift connection settings
+
+  LambdaCodeBucket:
+    Type: String
+    Default: 'cc-lambda-function-bucket'
+    Description: Name of the S3 bucket that contains the Lambda code
+
+  ExtractTransformLambdaCodeKey:
+    Type: String
+    Description: S3 key for the Extract Transform Lambda code
+
+  LoadLambdaCodeKey:
+    Type: String
+    Description: S3 key for the Load Lambda code
+
+  SQSQueueArn:
+    Type: String
+    Default: 'arn:aws:sqs:eu-west-1:339713081862:CC-Q'
+    Description: ARN of the existing SQS queue
+
+Resources:
+  ExtractTransformLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: extract-transform-coffee-cartel 
+      Handler: lambda_function.lambda_handler
+      Role: arn:aws:iam::339713081862:role/lambda-execution-role
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref ExtractTransformLambdaCodeKey
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 128
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Sub https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/CC-Q
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: !Sub "/aws/lambda/${AWS::StackName}-${AWS::Region}-${AWS::StackName}-ExtractTransformLambdaFunction"
+
+  LoadLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: load-coffee-cartel  
+      Handler: lambda_function.lambda_handler
+      Role: arn:aws:iam::339713081862:role/lambda-execution-role
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LoadLambdaCodeKey
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 128
+      Environment:
+        Variables:
+          SSM_PARAMETER_NAME: !Ref SSMParameterName
+      VpcConfig:
+        SubnetIds:
+          - subnet-011e49d2c53653df9
+        SecurityGroupIds:
+          - sg-05347bb4c6b2f7d31
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: !Sub "/aws/lambda/${AWS::StackName}-${AWS::Region}-${AWS::StackName}-LoadLambdaFunction"
+
+  LambdaPermissionForS3ExtractTransform:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ExtractTransformLambdaFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub arn:aws:s3:::${S3BucketName}
+
+  LambdaPermissionForSQS:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LoadLambdaFunction
+      Principal: sqs.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Ref SQSQueueArn
+
+  SQSQueueTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      EventSourceArn: !Ref SQSQueueArn
+      FunctionName: !Ref LoadLambdaFunction
+      Enabled: true
+
+Outputs:
+  ExtractTransformLambdaFunctionArn:
+    Description: ARN of the Extract-Transform Lambda function
+    Value: !GetAtt ExtractTransformLambdaFunction.Arn
+
+  LoadLambdaFunctionArn:
+    Description: ARN of the Load Lambda function
+    Value: !GetAtt LoadLambdaFunction.Arn
+
+  SSMParameterName:
+    Description: Name of the SSM parameter containing Redshift settings
+    Value: !Ref SSMParameterName
